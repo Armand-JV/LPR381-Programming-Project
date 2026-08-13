@@ -1,0 +1,22 @@
+=== Canonical Form / Model ===
+max 2 3 3 5 2 4
+11 8 6 14 10 10 <= 40
+bin bin bin bin bin bin
+
+
+=== Algorithm: Revised Primal Simplex ===
+Initial Basis (B = I)
+	x1	x2	x3	x4	x5	x6	s1	RHS
+z	2	3	3	5	2	4	0	0	
+s1	11	8	6	14	10	10	1	40	
+
+
+=== Result ===
+Status: Optimal
+Objective value: 0
+x1 = 0
+x2 = 0
+x3 = 0
+x4 = 0
+x5 = 0
+x6 = 0

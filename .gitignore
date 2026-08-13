@@ -1,0 +1,14 @@
+# Build outputs (Compilation artifacts)
+[Bb]in/
+[Oo]bj/
+
+# IDE / User-specific files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS-specific files
+.DS_Store
+Thumbs.db

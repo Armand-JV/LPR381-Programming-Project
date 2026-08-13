@@ -1,0 +1,117 @@
+LPR381 Programming Project - Proposed 4-Person Work Split
+
+        Standalone meeting handout
+
+1. Recommended Development Setup
+
+Language: C# with .NET in Visual Studio. Application: either a Console App or Windows Forms App. The team should choose
+one before development starts. Version control: one shared GitHub repository with feature branches and pull requests.
+
+2. Shared Rules Everyone Should Follow
+
+· The input text-file format is already specified in the project brief. We only need to build a parser that reads that format
+      correctly, not design a new format.
+
+· The parser must support max/min, any number of variables and constraints, relations (=, <=, >=), RHS values, and sign
+      restrictions (+, -, urs, int, bin).
+
+· Use shared model, constraint, tableau and solution classes so that every algorithm works with the same data structures.
+· Keep full precision during calculations and round displayed/exported decimal values to 3 decimal places.
+· All sections must combine into one working Visual Studio project, one solve.exe, and the required output text file.
+
+3. Work Split if Everyone Presents Their Own Section
+
+Use this split if the video is divided between all four members. Because presentation time is shared, the coding workload
+can also be shared more evenly.
+
+Person                                  Main Area                                                                         Responsibilities
+
+1       Core App + Simplex                                                                                     Set up the Visual Studio solution and
+
+                                                                                                               shared classes; implement the supplied-
+
+                                                                                                               format input parser and output writer;
+
+                                                                                                               Primal Simplex; Revised Primal
+
+                                                                                                               Simplex; menu/interface; assist with
+
+                                                                                                               final integration.
+
+2       Branch & Bound Simplex                                                                                 Implement LP relaxation branching,
+
+                                                                                                               sub-problems, backtracking, fathoming,
+
+                                                                                                               node tracking, all required tableau
+
+                                                                                                               iterations, best candidate, and
+
+                                                                                                               algorithm-specific validation/error
+
+                                                                                                               handling.
+
+3       Integer Algorithms                                                                                     Implement Cutting Plane and Branch &
+                                                                                                               Bound Knapsack, including cut
+                                                                                                               generation, repeated solving,
+                                                                                                               branching, backtracking, fathoming,
+                                                                                                               node output and best-candidate
+                                                                                                               reporting.
+
+4       Sensitivity + Duality                                                                                  Implement all required sensitivity-
+
+                                                                                                               analysis operations, shadow prices,
+
+                                                                                                               Duality, solving the dual, and
+
+                                                                                                               strong/weak duality verification.
+
+4. GitHub and Integration Plan
+
+· Create one private GitHub repository and add all four members as collaborators.
+                                                                           LPR381 - Proposed Group Work Split
+· Use separate feature branches for each member or module, then merge through pull requests.
+· Commit small, working changes with clear messages and pull the latest main branch before merging.
+· Agree on the shared classes and method inputs/outputs before everyone starts coding separately.
+· Integrate regularly. Do not leave the first full merge until the final week.
+
+5. Video Submission Plan
+
+The video must show the working program meeting the criteria, not only explain the code. The team should decide
+between these two approaches at the meeting:
+
+- Everyone presents their own section
+
+      · Person 1: introduction, input file, interface, Primal Simplex, Revised Primal Simplex and output file.
+      · Person 2: Branch & Bound Simplex.
+      · Person 3: Cutting Plane and Branch & Bound Knapsack.
+      · Person 4: Sensitivity Analysis and Duality.
+      · One volunteer combines the clips, checks audio/order, removes unnecessary pauses, and prepares the final
+
+            submission.
+Suggested video order: load input file -> show model/canonical form -> Primal Simplex -> Revised Simplex -> Branch &
+Bound Simplex -> Cutting Plane -> Branch & Bound Knapsack -> Sensitivity Analysis and Duality -> special/error cases ->
+output file and final executable.
+
+6. Optional Bonus Work
+
+Only attempt the bonus after the required project is complete and there is clearly enough time remaining. The brief
+offers up to 10 bonus marks for solving a non-linear problem such as f(x)=x^2 with an algorithm and explaining that code.
+· Any member can volunteer for the bonus once their main responsibilities are under control.
+· The bonus volunteer must also prepare and present/explain the bonus section in the final video.
+· If Option B is used, the bonus volunteer can present only the bonus section after the main presenter finishes the
+
+      required project. This avoids adding even more work to the sole presenter.
+· Do not let bonus work delay integration, testing, the required video, or any of the 100-mark criteria.
+
+7. Decisions to Make at the Team Meeting
+
+· Choose Console App or Windows Forms App.
+· Choose Video Option A or Option B.
+· Assign the four roles. If Option B is chosen, make sure the sole presenter receives the lightest coding role.
+· Create the GitHub repository and feature branches.
+· Agree on shared model/tableau/solution classes before development starts.
+· Choose who will edit/combine the final video.
+· Only near the end, decide whether someone has enough time to volunteer for the bonus section.
+
+                                                                           LPR381 - Proposed Group Work Split
+
