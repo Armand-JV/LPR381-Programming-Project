@@ -9,6 +9,10 @@
 *.userosscache
 *.sln.docstates
 
+# Settings files
+settings.json
+
+
 # OS-specific files
 .DS_Store
 Thumbs.db
