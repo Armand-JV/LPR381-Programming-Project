@@ -5,28 +5,7 @@ using LPR381Project.Models;
 namespace LPR381Project.Algorithms.BranchAndBound
 {
     /// <summary>
-    /// OWNER: Person 2 (Branch &amp; Bound Simplex)
-    ///
-    /// A self-contained two-phase Simplex used as the default LP-relaxation
-    /// engine for <see cref="BranchAndBoundSimplexSolver"/>.
-    ///
-    /// WHY THIS EXISTS: Branch &amp; Bound can only fathom correctly if the
-    /// relaxation solver (a) reports Infeasible as Infeasible, and (b) hands
-    /// back an untouched snapshot of every tableau iteration. Until Person 1's
-    /// PrimalSimplexSolver does both, B&amp;B carries its own engine so this
-    /// section is not blocked. It lives entirely inside the BranchAndBound
-    /// namespace - no shared file is modified.
-    ///
-    /// TO SWITCH BACK at integration time, change the one line in
-    /// BranchAndBoundSimplexSolver's default constructor:
-    ///     : this(new RelaxationSimplexSolver())
-    ///  -> : this(new PrimalSimplex.PrimalSimplexSolver())
-    ///
-    /// Method: two-phase Simplex (NOT Big-M). Phase 1 minimises the sum of the
-    /// artificial variables; if that minimum is greater than zero the model is
-    /// genuinely infeasible. This avoids the precision loss a large Big-M
-    /// penalty causes, which matters because B&amp;B compares node bounds
-    /// against the incumbent in order to prune.
+    /// Two-phase Simplex solver used for Branch and Bound LP relaxations.
     /// </summary>
     public sealed class RelaxationSimplexSolver : IAlgorithm
     {
@@ -39,9 +18,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
         private const double RatioTieTolerance = 1e-12;
         private const int MaxIterations = 5000;
 
-        /// <summary>When false the solver skips building tableau snapshots. Branch &amp;
-        /// Bound trees can visit many nodes; turning this off keeps the output
-        /// readable when only the final answer is wanted.</summary>
+        /// <summary>Controls whether tableau iterations are saved.</summary>
         public bool RecordIterations { get; set; } = true;
 
         public SolutionResult Solve(LPModel model)
@@ -56,13 +33,13 @@ namespace LPR381Project.Algorithms.BranchAndBound
 
             var form = BuildCanonicalForm(model);
 
-            // ---- Phase 1: drive the artificial variables to zero ----
+            // Phase 1: make the artificial variables zero.
             if (form.ArtificialColumns.Count > 0)
             {
+                // Maximise the negative sum of the artificial variables.
                 var phaseOneObjective = new double[form.N];
                 foreach (int artificialColumn in form.ArtificialColumns)
                 {
-                    // maximise -(sum of artificials) == minimise (sum of artificials)
                     phaseOneObjective[artificialColumn] = -1.0;
                 }
 
@@ -80,9 +57,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     return result;
                 }
 
-                // The phase 1 optimum is -(sum of artificials). Anything below zero
-                // means an artificial is stuck at a positive value, so no point
-                // satisfies every constraint at once.
+                // A negative result means the model is infeasible.
                 if (form.T[0, form.N] < -1e-7)
                 {
                     result.Status = SolutionStatus.Infeasible;
@@ -93,11 +68,11 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 DriveArtificialsOutOfBasis(form);
             }
 
-            // ---- Phase 2: optimise the real objective ----
+            // Phase 2 - solve the original objective.
             form.BuildObjectiveRow(form.MaxFormObjective);
             Snapshot(form, result, form.ArtificialColumns.Count > 0 ? "Phase 2 - Canonical Form" : "Canonical Form");
 
-            // Artificial columns must never re-enter the basis during phase 2.
+            // Do not allow artificial variables to enter in Phase 2.
             var phaseTwoColumns = new bool[form.N];
             for (int j = 0; j < form.N; j++) phaseTwoColumns[j] = true;
             foreach (int artificialColumn in form.ArtificialColumns) phaseTwoColumns[artificialColumn] = false;
@@ -124,7 +99,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
         }
 
         // ------------------------------------------------------------------
-        //  Simplex engine
+        //  Simplex calculations
         // ------------------------------------------------------------------
 
         private enum SimplexOutcome { Optimal, Unbounded, IterationLimit }
@@ -150,9 +125,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return SimplexOutcome.IterationLimit;
         }
 
-        /// <summary>Dantzig rule: the most negative entry in the objective row. Row 0
-        /// holds (z_j - c_j) in maximisation form, so a negative entry means the
-        /// column can still improve the objective.</summary>
+        /// <summary>Selects the most negative value in the objective row.</summary>
         private int SelectEnteringColumn(Form form, bool[] allowedColumns)
         {
             int entering = -1;
@@ -171,8 +144,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return entering;
         }
 
-        /// <summary>Minimum ratio test. Ties break towards the smallest basic variable
-        /// index (Bland's rule) so a degenerate model cannot cycle forever.</summary>
+        /// <summary>Uses the minimum ratio test to select the leaving row.</summary>
         private int SelectLeavingRow(Form form, int enteringColumn)
         {
             int leaving = -1;
@@ -199,9 +171,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return leaving;
         }
 
-        /// <summary>After a feasible phase 1 an artificial can still sit in the basis at
-        /// value zero. Pivot it out on any real column so phase 2 starts from a clean
-        /// basis; a row with no such column is redundant and is left as it is.</summary>
+        /// <summary>Pivots artificial variables out of the basis where possible.</summary>
         private void DriveArtificialsOutOfBasis(Form form)
         {
             for (int r = 1; r <= form.M; r++)
@@ -229,8 +199,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             int variableCount = model.ObjectiveCoefficients.Length;
             int constraintCount = model.Constraints.Count;
 
-            // Everything is solved as a maximisation internally; a min model is
-            // maximised as -c and the objective value is flipped back at the end.
+            // Convert minimisation problems to maximisation while solving.
             double sense = model.Objective == ObjectiveType.Max ? 1.0 : -1.0;
 
             var headers = new List<string>();
@@ -245,7 +214,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 switch (model.SignRestrictions[j])
                 {
                     case SignRestriction.Unrestricted:
-                        // x = x+ - x-, both non-negative
+                        // Split unrestricted x into x+ and x-.
                         variableColumns[j] = new[] { headers.Count, headers.Count + 1 };
                         variableSigns[j] = 1.0;
                         headers.Add(string.Format("x{0}+", j + 1));
@@ -255,14 +224,14 @@ namespace LPR381Project.Algorithms.BranchAndBound
                         break;
 
                     case SignRestriction.Negative:
-                        // x <= 0, so substitute x = -xp with xp >= 0
+                        // Replace negative x with -xp.
                         variableColumns[j] = new[] { headers.Count };
                         variableSigns[j] = -1.0;
                         headers.Add(string.Format("x{0}p", j + 1));
                         objective.Add(-c);
                         break;
 
-                    default: // Positive, Integer and Binary are all x >= 0 once relaxed
+                    default: // Positive, integer and binary variables are x >= 0 after relaxation.
                         variableColumns[j] = new[] { headers.Count };
                         variableSigns[j] = 1.0;
                         headers.Add(string.Format("x{0}", j + 1));
@@ -273,8 +242,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
 
             int structuralCount = headers.Count;
 
-            // Normalise every row to a non-negative RHS first. Negating a row also
-            // flips its relation - getting that wrong produces an invalid basis.
+            // Make the RHS positive and flip the relation if needed.
             var rowCoefficients = new double[constraintCount][];
             var rowRelations = new RelationType[constraintCount];
             var rowRhs = new double[constraintCount];
@@ -306,7 +274,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 rowCoefficients[i] = row;
             }
 
-            // Slack / surplus columns come first, then the artificials.
+            // Add slack or surplus variables, then artificial variables.
             int slackCount = 0;
             int artificialCount = 0;
             for (int i = 0; i < constraintCount; i++)
@@ -391,7 +359,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
 
         private void ExtractSolution(Form form, LPModel model, SolutionResult result)
         {
-            // Basic columns take their RHS value; every other column is zero.
+            // Basic variables use the RHS value. Other variables are zero.
             var columnValues = new double[form.N];
             for (int r = 1; r <= form.M; r++)
             {
@@ -409,7 +377,6 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     : form.VariableSigns[j] * columnValues[columns[0]];
             }
 
-            // Row 0's RHS carries the maximisation-form objective; flip it back for a min model.
             result.ObjectiveValue = form.T[0, form.N] * form.Sense;
         }
 
@@ -420,15 +387,15 @@ namespace LPR381Project.Algorithms.BranchAndBound
         }
 
         // ------------------------------------------------------------------
-        //  Tableau state
+        //  Tableau data
         // ------------------------------------------------------------------
 
         private sealed class Form
         {
-            public readonly double[,] T;   // (M+1) x (N+1); row 0 = objective, last column = RHS
-            public readonly int[] Basis;   // column index of the basic variable per constraint row
-            public readonly int M;         // constraint count
-            public readonly int N;         // column count excluding RHS
+            public readonly double[,] T;   // Tableau values.
+            public readonly int[] Basis;   // Basic column for each constraint row.
+            public readonly int M;         // Number of constraints.
+            public readonly int N;         // Number of columns excluding RHS.
 
             public string[] Headers = Array.Empty<string>();
             public double[] MaxFormObjective = Array.Empty<double>();
@@ -450,9 +417,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 return ArtificialColumns.Contains(column);
             }
 
-            /// <summary>Lays the given maximisation-form objective into row 0 as
-            /// (z_j - c_j), then prices out the current basis so every basic column
-            /// reads zero.</summary>
+            /// <summary>Builds the objective row and makes the basic columns zero.</summary>
             public void BuildObjectiveRow(double[] maxFormObjective)
             {
                 for (int j = 0; j < N; j++) T[0, j] = -maxFormObjective[j];
@@ -491,16 +456,13 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 Basis[pivotRow - 1] = pivotColumn;
             }
 
-            /// <summary>Builds a fresh Tableau on every call. Nothing the caller receives
-            /// aliases live solver state, so a later pivot can never rewrite an
-            /// iteration that was already recorded.</summary>
+            /// <summary>Creates a copy of the current tableau for the iteration log.</summary>
             public Tableau ToTableau(string label)
             {
                 var basicNames = new string[M];
                 for (int r = 0; r < M; r++) basicNames[r] = Headers[Basis[r]];
 
-                // Copy out, flattening negative zero and pivot noise so the displayed
-                // tableau reads "0" rather than "-0" or "-2.7E-17".
+                // Show very small values as 0.
                 var values = new double[M + 1, N + 1];
                 for (int r = 0; r <= M; r++)
                 {

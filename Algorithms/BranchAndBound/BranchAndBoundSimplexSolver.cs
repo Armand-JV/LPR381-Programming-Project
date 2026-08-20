@@ -6,42 +6,22 @@ using LPR381Project.Models;
 namespace LPR381Project.Algorithms.BranchAndBound
 {
     /// <summary>
-    /// OWNER: Person 2 (Branch &amp; Bound Simplex)
-    ///
-    /// Solves an Integer / Binary Programming model by Branch &amp; Bound over LP
-    /// relaxations, covering every point the brief lists under "Algorithm
-    /// Criteria -> Branch &amp; Bound Simplex":
-    ///
-    ///   * Backtracking          - depth-first search over an explicit stack; popping
-    ///                             a node after a branch is exhausted IS the backtrack,
-    ///                             and each one is recorded in the node log.
-    ///   * All sub-problems      - every fractional integer variable produces both the
-    ///                             "&lt;= floor" and "&gt;= ceil" child.
-    ///   * Fathoming             - a node is fathomed when it is infeasible, when its
-    ///                             relaxed bound cannot beat the incumbent, or when it
-    ///                             is already integer feasible.
-    ///   * All table iterations  - every tableau from every sub-problem is forwarded to
-    ///                             result.Iterations, prefixed with its sub-problem id.
-    ///   * Best candidate        - tracked across the whole tree and reported in Notes.
-    ///
-    /// The LP relaxation engine is injected rather than hard-coded, so this class
-    /// depends only on the shared IAlgorithm contract and never on one particular
-    /// simplex implementation.
+    /// Solves integer and binary LP problems using Branch and Bound.
     /// </summary>
     public sealed class BranchAndBoundSimplexSolver : IAlgorithm
     {
         private readonly IAlgorithm _lpSolver;
 
-        /// <summary>A relaxation value counts as integral when it is this close to a whole
-        /// number. Looser than the simplex epsilon because it absorbs the rounding error
-        /// accumulated over a chain of pivots.</summary>
+        /// <summary>Tolerance used when checking for whole numbers.</summary>
         private const double IntegerTolerance = 1e-6;
 
-        /// <summary>Tolerance used when comparing a node bound against the incumbent, so
-        /// floating-point noise cannot make an equal-valued node look better.</summary>
+        /// <summary>Tolerance used when comparing objective values.</summary>
         private const double BoundTolerance = 1e-6;
 
-        /// <summary>Safety valve: stops a pathological model from expanding forever.</summary>
+        /// <summary>Tolerance used when two variables sit the same distance from 0.5.</summary>
+        private const double TieTolerance = 1e-9;
+
+        /// <summary>Maximum number of sub-problems to solve.</summary>
         private const int MaxNodes = 5000;
 
         public string Name
@@ -49,20 +29,12 @@ namespace LPR381Project.Algorithms.BranchAndBound
             get { return "Branch & Bound Simplex"; }
         }
 
-        /// <summary>Used by the menu (AlgorithmRegistry). Defaults to this section's own
-        /// two-phase relaxation solver.
-        ///
-        /// INTEGRATION NOTE: once Person 1's PrimalSimplexSolver reports Infeasible
-        /// correctly and stops aliasing its first tableau, swap the line below to
-        /// <c>this(new PrimalSimplex.PrimalSimplexSolver())</c> and delete
-        /// RelaxationSimplexSolver. Nothing else in this file changes.</summary>
+        /// <summary>Uses the relaxation solver by default.</summary>
         public BranchAndBoundSimplexSolver()
             : this(new RelaxationSimplexSolver())
         {
         }
 
-        /// <summary>Injects the LP relaxation engine. Any IAlgorithm works, which is what
-        /// makes this class testable against a known-good solver.</summary>
         public BranchAndBoundSimplexSolver(IAlgorithm lpSolver)
         {
             _lpSolver = lpSolver ?? throw new ArgumentNullException(nameof(lpSolver));
@@ -81,7 +53,6 @@ namespace LPR381Project.Algorithms.BranchAndBound
             int variableCount = model.ObjectiveCoefficients.Length;
             bool maximise = model.Objective == ObjectiveType.Max;
 
-            // Which variables actually carry an integrality restriction.
             var integerVariables = new List<int>();
             for (int j = 0; j < variableCount; j++)
             {
@@ -97,7 +68,6 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 return SolveAsPureLinearProgram(model, result);
             }
 
-            // ---- Root relaxation -------------------------------------------------
             var rootNode = new Node
             {
                 Id = 0,
@@ -141,9 +111,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
 
                 Node node = stack.Pop();
 
-                // Popping a node that is no deeper than the previous one means the
-                // branch we were following is finished and we have stepped back up
-                // the tree. That step back is the backtrack the brief asks for.
+                // Check if the search has moved back to another branch.
                 if (previousDepth >= 0 && node.Depth <= previousDepth)
                 {
                     result.Notes.Add(node.Depth == previousDepth
@@ -165,7 +133,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 SolutionResult relaxation;
                 try
                 {
-                    // Clone so the injected solver can never mutate our node's model.
+                    // Solve a copy of the current LP relaxation.
                     relaxation = _lpSolver.Solve(node.Model.Clone());
                 }
                 catch (Exception ex)
@@ -175,16 +143,14 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     continue;
                 }
 
-                // Forward every tableau from this sub-problem, tagged with the node it
-                // came from. Relabelling is safe: these objects are freshly created by
-                // each Solve() call and are not shared with anything else.
+                // Add the sub-problem name to each tableau.
                 foreach (Tableau tableau in relaxation.Iterations)
                 {
                     tableau.Label = string.Format("{0} - {1}", nodeLabel, tableau.Label);
                     result.Iterations.Add(tableau);
                 }
 
-                // ---- Fathom: infeasible ----
+                // Fathom if infeasible.
                 if (relaxation.Status == SolutionStatus.Infeasible)
                 {
                     fathomedInfeasible++;
@@ -193,7 +159,6 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     continue;
                 }
 
-                // ---- Unbounded relaxation ----
                 if (relaxation.Status == SolutionStatus.Unbounded)
                 {
                     relaxationUnbounded = true;
@@ -212,7 +177,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
 
                 double bound = relaxation.ObjectiveValue;
 
-                // ---- Fathom: bound cannot beat the incumbent ----
+                // Fathom if this bound cannot improve the best solution.
                 if (bestVariableValues != null && !IsBetter(bound, bestObjective, maximise))
                 {
                     fathomedByBound++;
@@ -222,7 +187,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     continue;
                 }
 
-                // ---- Fathom: already integer feasible ----
+                // Check if this is an integer solution.
                 int branchVariable = SelectBranchingVariable(relaxation.VariableValues, integerVariables);
                 if (branchVariable < 0)
                 {
@@ -248,7 +213,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                     continue;
                 }
 
-                // ---- Branch ----
+                // Branch on the selected fractional variable.
                 double branchValue = relaxation.VariableValues[branchVariable];
                 double floorValue = Math.Floor(branchValue);
                 double ceilingValue = Math.Ceiling(branchValue);
@@ -263,13 +228,11 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 var upBranch = CreateChild(node, nextNodeId++, branchVariable,
                                            RelationType.GreaterOrEqual, ceilingValue, variableCount);
 
-                // Pushed up-first so the stack pops the "<=" child first; node ids then
-                // ascend in the same order the tree is explored, which keeps the log readable.
+                // Push >= first so the <= branch is solved first.
                 stack.Push(upBranch);
                 stack.Push(downBranch);
             }
 
-            // ---- Report ----
             result.Notes.Add("");
             result.Notes.Add("=== Branch & Bound summary ===");
             result.Notes.Add(string.Format("Sub-problems solved      : {0}", nodesExplored));
@@ -312,10 +275,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
         //  Model preparation
         // ------------------------------------------------------------------
 
-        /// <summary>Builds the root LP relaxation: integrality is dropped, and every
-        /// binary variable picks up the explicit x &lt;= 1 bound that "bin" implies.
-        /// Without that bound the relaxation of the brief's knapsack is unbounded in
-        /// the wrong direction and returns nonsense such as x3 = 6.667.</summary>
+        /// <summary>Builds the LP relaxation and adds x <= 1 for binary variables.</summary>
         private LPModel BuildRootRelaxation(LPModel model)
         {
             LPModel relaxed = model.Clone();
@@ -343,8 +303,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return relaxed;
         }
 
-        /// <summary>Creates one child sub-problem by adding a single branch constraint
-        /// to a copy of the parent's model.</summary>
+        /// <summary>Creates a child node with its branch constraint.</summary>
         private Node CreateChild(Node parent, int childId, int variableIndex,
                                  RelationType relation, double bound, int variableCount)
         {
@@ -366,10 +325,10 @@ namespace LPR381Project.Algorithms.BranchAndBound
             };
         }
 
-        /// <summary>Picks the integer variable whose relaxed value sits closest to the
-        /// midpoint between two whole numbers - the "most fractional" rule. Returns -1
-        /// when every integer-restricted variable is already whole, which is the signal
-        /// that the node is integer feasible.</summary>
+        /// <summary>
+        /// Selects a fractional integer variable to branch on: closest to 0.5 wins, ties go to the
+        /// left-most variable. Returns -1 if all are whole numbers.
+        /// </summary>
         private int SelectBranchingVariable(double[] values, List<int> integerVariables)
         {
             int chosen = -1;
@@ -384,7 +343,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
                 }
 
                 double distanceToHalf = Math.Abs(fraction - 0.5);
-                if (distanceToHalf < smallestDistanceToHalf)
+                if (distanceToHalf < smallestDistanceToHalf - TieTolerance)
                 {
                     smallestDistanceToHalf = distanceToHalf;
                     chosen = j;
@@ -394,9 +353,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return chosen;
         }
 
-        /// <summary>A model with no int/bin restriction has nothing to branch on, so the
-        /// relaxation optimum is already the answer. Reported rather than treated as an
-        /// error, so choosing this menu entry for a plain LP still does something useful.</summary>
+        /// <summary>Solves normally when there are no integer or binary variables.</summary>
         private SolutionResult SolveAsPureLinearProgram(LPModel model, SolutionResult result)
         {
             SolutionResult relaxation = _lpSolver.Solve(model.Clone());
@@ -422,8 +379,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
         //  Validation and formatting
         // ------------------------------------------------------------------
 
-        /// <summary>Algorithm-specific validation. Fails loudly with a message the menu
-        /// can show, rather than throwing an IndexOutOfRange somewhere deep in the tree.</summary>
+        /// <summary>Checks that the model contains the required data.</summary>
         private void ValidateModel(LPModel model)
         {
             if (model == null)
@@ -464,9 +420,7 @@ namespace LPR381Project.Algorithms.BranchAndBound
             }
         }
 
-        /// <summary>True when <paramref name="candidate"/> genuinely improves on
-        /// <paramref name="incumbent"/>. An equal value is not an improvement, which is
-        /// exactly what lets a node be fathomed by bound.</summary>
+        /// <summary>Checks if a value improves the current best objective.</summary>
         private static bool IsBetter(double candidate, double incumbent, bool maximise)
         {
             return maximise
@@ -495,15 +449,14 @@ namespace LPR381Project.Algorithms.BranchAndBound
             return string.Join(", ", parts);
         }
 
-        /// <summary>Rounds to the three decimal places the brief requires, using the
-        /// invariant culture so the log always reads "0.667" and never "0,667".</summary>
+        /// <summary>Formats values to a maximum of 3 decimal places.</summary>
         private static string Format(double value)
         {
             return Math.Round(value, 3, MidpointRounding.AwayFromZero)
                        .ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        /// <summary>One sub-problem in the search tree.</summary>
+        /// <summary>Stores one Branch and Bound sub-problem.</summary>
         private sealed class Node
         {
             public int Id;
