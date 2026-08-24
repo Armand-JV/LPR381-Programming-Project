@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using LPR381Project.Algorithms;
 using LPR381Project.IO;
 using LPR381Project.Models;
@@ -28,6 +29,61 @@ namespace LPR381Project
             if (string.IsNullOrEmpty(inputPath))
             {
                 Console.WriteLine("No input file provided. Exiting.");
+                return;
+            }
+
+            // Special batch mode: run all files under tests/ when inputPath == "--runtests"
+            if (inputPath == "--runtests")
+            {
+                Console.WriteLine("Running batch tests in 'tests/' folder...");
+                var testDir = Path.Combine(Directory.GetCurrentDirectory(), "tests");
+                if (!Directory.Exists(testDir))
+                {
+                    Console.WriteLine("No tests directory found: " + testDir);
+                    return;
+                }
+
+                var files = Directory.GetFiles(testDir, "*.txt");
+                foreach (var file in files)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("============================");
+                    Console.WriteLine("Test file: " + file);
+                    Console.WriteLine("============================");
+                    LPModel testModel;
+                    try
+                    {
+                        testModel = InputParser.ParseFile(file);
+                        Console.WriteLine();
+                        Console.WriteLine("=== Parsed Model ===");
+                        Console.WriteLine(testModel.ToString());
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error parsing input file: {ex.Message}");
+                        continue;
+                    }
+
+                    var algorithms = AlgorithmRegistry.GetAll();
+                    foreach (var alg in algorithms)
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine($"Running {alg.Name}...");
+                        SolutionResult result;
+                        try
+                        {
+                            result = alg.Solve(testModel.Clone());
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error running algorithm {alg.Name}: {ex.Message}");
+                            continue;
+                        }
+
+                        DisplayResult(result);
+                    }
+                }
+
                 return;
             }
 
@@ -85,6 +141,34 @@ namespace LPR381Project
                 Console.WriteLine();
                 Console.WriteLine($"Running {selectedAlgorithm.Name}...");
                 Console.WriteLine();
+
+                // Warn upfront if user chose a primal simplex and the model has binary variables
+                bool isPrimal = selectedAlgorithm.Name.Contains("Primal Simplex", StringComparison.OrdinalIgnoreCase);
+                bool hasBinary = false;
+                if (model.SignRestrictions != null)
+                {
+                    for (int i = 0; i < model.SignRestrictions.Length; i++)
+                    {
+                        if (model.SignRestrictions[i] == SignRestriction.Binary)
+                        {
+                            hasBinary = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (isPrimal && hasBinary)
+                {
+                    Console.WriteLine("Warning: you selected a primal simplex algorithm but the model contains binary variables.");
+                    Console.WriteLine("The primal simplex solvers will solve the LP relaxation and may not respect binary integrality.");
+                    Console.Write("Proceed with this algorithm? (y/n): ");
+                    string? proceed = Console.ReadLine()?.Trim().ToLower();
+                    if (proceed != "y" && proceed != "yes")
+                    {
+                        Console.WriteLine("Skipping algorithm.");
+                        continue;
+                    }
+                }
 
                 SolutionResult result;
                 try

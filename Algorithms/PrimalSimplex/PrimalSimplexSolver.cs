@@ -22,12 +22,39 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                 AlgorithmName = Name,
                 Status = SolutionStatus.NotSolved
             };
+            // Warn when model contains integer/binary variables: we only solve the LP relaxation
+            if (model.SignRestrictions != null)
+            {
+                for (int i = 0; i < model.SignRestrictions.Length; i++)
+                {
+                    if (model.SignRestrictions[i] == SignRestriction.Integer || model.SignRestrictions[i] == SignRestriction.Binary)
+                    {
+                        result.Notes.Add("Warning: model contains integer/binary variables — simplex will solve the LP relaxation only.");
+                        break;
+                    }
+                }
+            }
+
+            // Work on a clone so we don't mutate the caller's model. Convert minimization
+            // problems to maximization by negating objective coefficients so the rest of
+            // the solver can assume a maximization problem.
+            var workingModel = model.Clone();
+            bool wasMin = false;
+            if (workingModel.Objective == ObjectiveType.Min)
+            {
+                wasMin = true;
+                workingModel.Objective = ObjectiveType.Max;
+                for (int i = 0; i < workingModel.ObjectiveCoefficients.Length; i++)
+                {
+                    workingModel.ObjectiveCoefficients[i] = -workingModel.ObjectiveCoefficients[i];
+                }
+            }
 
             // Step 1: Convert to canonical form (standard form with slack/surplus variables)
-            var canonicalData = BuildCanonicalForm(model);
+            var canonicalData = BuildCanonicalForm(workingModel);
 
             // Step 2: Build initial tableau
-            var tableau = BuildInitialTableau(canonicalData, model.Objective);
+            var tableau = BuildInitialTableau(canonicalData, workingModel.Objective);
             result.Iterations.Add(tableau);
 
             // Step 3: Simplex iterations
@@ -36,14 +63,43 @@ namespace LPR381Project.Algorithms.PrimalSimplex
 
             while (iteration < maxIterations)
             {
-                // Check for optimality (all reduced costs >= 0 for max, <= 0 for min)
-                int enteringCol = SelectEnteringVariable(tableau, model.Objective);
+                // Check for optimality (reduced costs based on working objective)
+                int enteringCol = SelectEnteringVariable(tableau, workingModel.Objective);
 
                 if (enteringCol == -1)
                 {
+                    // Candidate optimality: check for leftover artificial basics with positive RHS
+                    // which indicate infeasibility of the original LP.
+                    int rhsCol = tableau.ColumnCount - 1;
+                    var infeasibleArtificials = new List<string>();
+                    for (int r = 0; r < tableau.BasicVariables.Length; r++)
+                    {
+                        var bv = tableau.BasicVariables[r];
+                        if (!string.IsNullOrEmpty(bv) && bv.StartsWith("a", StringComparison.OrdinalIgnoreCase))
+                        {
+                            double rhsVal = tableau.Values[r + 1, rhsCol];
+                            if (rhsVal > Epsilon)
+                            {
+                                infeasibleArtificials.Add($"{bv} (RHS={rhsVal:0.######})");
+                            }
+                        }
+                    }
+
+                    if (infeasibleArtificials.Count > 0)
+                    {
+                        result.Status = SolutionStatus.Infeasible;
+                        result.Notes.Add("Problem is infeasible: artificial variable(s) remain positive in basis: " + string.Join(", ", infeasibleArtificials));
+                        break;
+                    }
+
                     // Optimal solution found
                     result.Status = SolutionStatus.Optimal;
-                    ExtractSolution(tableau, canonicalData, result, model);
+                    ExtractSolution(tableau, canonicalData, result, workingModel);
+                    // If we converted from a minimization problem, flip the objective sign back
+                    if (wasMin)
+                    {
+                        result.ObjectiveValue = -result.ObjectiveValue;
+                    }
                     break;
                 }
 
