@@ -29,7 +29,13 @@ namespace LPR381Project.Algorithms.BranchAndBound
             get { return "Branch & Bound Simplex"; }
         }
 
-        /// <summary>Uses the relaxation solver by default.</summary>
+        /// <summary>
+        /// Uses the self-contained two-phase relaxation solver by default. Any
+        /// <see cref="IAlgorithm"/> can be injected instead, but a B&amp;B engine has to
+        /// report an infeasible sub-problem as <see cref="SolutionStatus.Infeasible"/>
+        /// and hand back tableau snapshots it will not keep mutating - otherwise the
+        /// fathoming decisions and the iteration log are both wrong.
+        /// </summary>
         public BranchAndBoundSimplexSolver()
             : this(new RelaxationSimplexSolver())
         {
@@ -452,8 +458,13 @@ namespace LPR381Project.Algorithms.BranchAndBound
         /// <summary>Formats values to a maximum of 3 decimal places.</summary>
         private static string Format(double value)
         {
-            return Math.Round(value, 3, MidpointRounding.AwayFromZero)
-                       .ToString("0.###", CultureInfo.InvariantCulture);
+            double rounded = Math.Round(value, 3, MidpointRounding.AwayFromZero);
+            if (rounded == 0.0)
+            {
+                return "0"; // avoids a negative zero printing as "-0"
+            }
+
+            return rounded.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
         /// <summary>Stores one Branch and Bound sub-problem.</summary>

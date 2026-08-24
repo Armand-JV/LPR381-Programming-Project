@@ -372,12 +372,18 @@ namespace LPR381Project.Algorithms.BranchAndBound
             for (int j = 0; j < variableCount; j++)
             {
                 int[] columns = form.VariableColumns[j];
-                result.VariableValues[j] = columns.Length == 2
+                result.VariableValues[j] = NormaliseZero(columns.Length == 2
                     ? columnValues[columns[0]] - columnValues[columns[1]]
-                    : form.VariableSigns[j] * columnValues[columns[0]];
+                    : form.VariableSigns[j] * columnValues[columns[0]]);
             }
 
-            result.ObjectiveValue = form.T[0, form.N] * form.Sense;
+            result.ObjectiveValue = NormaliseZero(form.T[0, form.N] * form.Sense);
+        }
+
+        /// <summary>Drops the sign off a negative zero so a zero never reads as "-0".</summary>
+        private static double NormaliseZero(double value)
+        {
+            return value == 0.0 ? 0.0 : value;
         }
 
         private void Snapshot(Form form, SolutionResult result, string label)
