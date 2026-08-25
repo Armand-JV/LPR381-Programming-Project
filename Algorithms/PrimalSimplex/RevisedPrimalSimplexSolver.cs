@@ -25,8 +25,36 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                 Status = SolutionStatus.NotSolved
             };
 
-            // Build canonical form data
-            var data = BuildCanonicalForm(model);
+            // Warn when model contains integer/binary variables: we only solve the LP relaxation
+            if (model.SignRestrictions != null)
+            {
+                for (int i = 0; i < model.SignRestrictions.Length; i++)
+                {
+                    if (model.SignRestrictions[i] == SignRestriction.Integer || model.SignRestrictions[i] == SignRestriction.Binary)
+                    {
+                        result.Notes.Add("Warning: model contains integer/binary variables — simplex will solve the LP relaxation only.");
+                        break;
+                    }
+                }
+            }
+
+            // Work on a clone so we don't mutate the caller's model. Convert minimization
+            // problems to maximization by negating objective coefficients so the rest of
+            // the solver can assume a maximization problem.
+            var workingModel = model.Clone();
+            bool wasMin = false;
+            if (workingModel.Objective == ObjectiveType.Min)
+            {
+                wasMin = true;
+                workingModel.Objective = ObjectiveType.Max;
+                for (int i = 0; i < workingModel.ObjectiveCoefficients.Length; i++)
+                {
+                    workingModel.ObjectiveCoefficients[i] = -workingModel.ObjectiveCoefficients[i];
+                }
+            }
+
+            // Build canonical form data using working model
+            var data = BuildCanonicalForm(workingModel);
 
             // Initialize basis inverse (B^-1) as identity
             int basisSize = data.NumConstraints;
@@ -47,14 +75,52 @@ namespace LPR381Project.Algorithms.PrimalSimplex
 
             while (iteration < maxIterations)
             {
-                // Compute reduced costs: c_B * B^-1 * A - c
-                int enteringCol = SelectEnteringVariable(data, basisInverse, basicVars, model.Objective);
+                // Compute current RHS: B^-1 * b (needed for infeasibility checks and ratio tests)
+                double[] currentRHS = new double[basisSize];
+                for (int i = 0; i < basisSize; i++)
+                {
+                    for (int j = 0; j < basisSize; j++)
+                    {
+                        currentRHS[i] += basisInverse[i, j] * data.RightHandSide[j];
+                    }
+                }
+
+                // Compute reduced costs: c_B * B^-1 * A - c (use working objective)
+                int enteringCol = SelectEnteringVariable(data, basisInverse, basicVars, workingModel.Objective);
 
                 if (enteringCol == -1)
                 {
+                    // Candidate optimal: check for artificial basics with positive RHS
+                    var infeasibleArtificials = new List<string>();
+                    int artificialStart = data.TotalVars - data.NumArtificial;
+                    for (int i = 0; i < basisSize; i++)
+                    {
+                        int bvIndex = basicVars[i];
+                        if (data.NumArtificial > 0 && bvIndex >= artificialStart)
+                        {
+                            double rhsVal = currentRHS[i];
+                            if (rhsVal > Epsilon)
+                            {
+                                string name = GetVariableName(bvIndex, data);
+                                infeasibleArtificials.Add($"{name} (RHS={rhsVal:0.######})");
+                            }
+                        }
+                    }
+
+                    if (infeasibleArtificials.Count > 0)
+                    {
+                        result.Status = SolutionStatus.Infeasible;
+                        result.Notes.Add("Problem is infeasible: artificial variable(s) remain positive in basis: " + string.Join(", ", infeasibleArtificials));
+                        break;
+                    }
+
                     // Optimal
                     result.Status = SolutionStatus.Optimal;
-                    ExtractSolution(data, basisInverse, basicVars, result, model);
+                    ExtractSolution(data, basisInverse, basicVars, result, workingModel);
+                    if (wasMin)
+                    {
+                        result.ObjectiveValue = -result.ObjectiveValue;
+                    }
                     break;
                 }
 
@@ -65,16 +131,6 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                     for (int j = 0; j < basisSize; j++)
                     {
                         enteringColumn[i] += basisInverse[i, j] * data.ConstraintMatrix[j, enteringCol];
-                    }
-                }
-
-                // Compute current RHS: B^-1 * b
-                double[] currentRHS = new double[basisSize];
-                for (int i = 0; i < basisSize; i++)
-                {
-                    for (int j = 0; j < basisSize; j++)
-                    {
-                        currentRHS[i] += basisInverse[i, j] * data.RightHandSide[j];
                     }
                 }
 
@@ -296,7 +352,8 @@ namespace LPR381Project.Algorithms.PrimalSimplex
 
                     if (objective == ObjectiveType.Max)
                     {
-                        if (reducedCost < -Epsilon && reducedCost < bestValue)
+                        // For maximization: enter variable with most POSITIVE reduced cost
+                        if (reducedCost > Epsilon && reducedCost > bestValue)
                         {
                             bestValue = reducedCost;
                             enteringCol = j;
@@ -304,7 +361,8 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                     }
                     else
                     {
-                        if (reducedCost > Epsilon && reducedCost > bestValue)
+                        // For minimization: enter variable with most NEGATIVE reduced cost
+                        if (reducedCost < -Epsilon && reducedCost < bestValue)
                         {
                             bestValue = reducedCost;
                             enteringCol = j;
