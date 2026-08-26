@@ -49,6 +49,58 @@ namespace LPR381Project.NonLinear
             return new ObjectiveFunction(text.Trim(), root, variables);
         }
 
+        /// <summary>
+        /// Evaluates text that has to come out as a single number - "pi/2", "2^-4",
+        /// "-sqrt(2)". The prompts that ask for an interval, a starting point or a
+        /// tolerance use this, so anything writable in a function is writable there too.
+        /// </summary>
+        /// <remarks>
+        /// Returns false rather than throwing, because every caller has a default to
+        /// fall back on and none of them wants to handle an exception. Text that still
+        /// mentions a variable is rejected: a starting point of "x" is a question the
+        /// caller cannot answer. A NaN or infinite result is rejected for the same
+        /// reason - "1/0" is not a starting point either.
+        /// </remarks>
+        public static bool TryParseConstant(string text, out double value)
+        {
+            value = 0.0;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            ExpressionNode root;
+            ParserState state;
+
+            try
+            {
+                state = new ParserState(Tokenize(text), text);
+                root = ParseExpression(state);
+            }
+            catch (ParseException)
+            {
+                return false;
+            }
+
+            if (!state.AtEnd || state.SeenVariables.Count > 0)
+            {
+                return false;
+            }
+
+            // No variables, so an empty slot table and an empty point are enough.
+            root.Bind(new Dictionary<string, int>());
+            double result = root.Evaluate(Array.Empty<double>());
+
+            if (double.IsNaN(result) || double.IsInfinity(result))
+            {
+                return false;
+            }
+
+            value = result;
+            return true;
+        }
+
         // Grammar rules in precedence order.
 
         /// <summary>Parses addition and subtraction.</summary>
@@ -97,6 +149,15 @@ namespace LPR381Project.NonLinear
             {
                 state.Advance();
                 return ParseUnary(state);
+            }
+
+            // The tokenizer turns a bare root sign into this, so it binds exactly as
+            // tightly as a sign does: the root covers the value it sits in front of and
+            // nothing after it, which is how it reads on paper.
+            if (state.CurrentIs("sqrt"))
+            {
+                state.Advance();
+                return new FunctionNode("sqrt", Math.Sqrt, ParseUnary(state));
             }
 
             return ParseFactor(state);
@@ -220,6 +281,27 @@ namespace LPR381Project.NonLinear
                         i++;
                     }
 
+                    // Scientific notation. The 'e' is only swallowed when a real
+                    // exponent follows, so a bare 'e' after a number stays Euler's
+                    // constant rather than being eaten as a broken exponent.
+                    if (i < text.Length && (text[i] == 'e' || text[i] == 'E'))
+                    {
+                        int peek = i + 1;
+                        if (peek < text.Length && (text[peek] == '+' || text[peek] == '-'))
+                        {
+                            peek++;
+                        }
+
+                        if (peek < text.Length && char.IsDigit(text[peek]))
+                        {
+                            i = peek;
+                            while (i < text.Length && char.IsDigit(text[i]))
+                            {
+                                i++;
+                            }
+                        }
+                    }
+
                     string number = text.Substring(start, i - start);
                     if (!double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
                     {
@@ -239,6 +321,42 @@ namespace LPR381Project.NonLinear
                     }
 
                     tokens.Add(new Token(TokenKind.Identifier, text.Substring(start, i - start), start));
+                    continue;
+                }
+
+                // The symbols people paste out of a document or type on a phone
+                // keyboard. They are mapped here, each at its own position, rather than
+                // by rewriting the input first - a rewrite would shift every later
+                // character and leave the caret in a parse error pointing at the wrong
+                // column.
+                if (c == '\u2212' || c == '\u00D7' || c == '\u22C5'
+                    || c == '\u00B7' || c == '\u00F7')
+                {
+                    // U+2212 minus, U+00F7 division sign; the rest are all multiply.
+                    string ascii = c == '\u2212' ? "-" : c == '\u00F7' ? "/" : "*";
+                    tokens.Add(new Token(TokenKind.Symbol, ascii, i));
+                    i++;
+                    continue;
+                }
+
+                // A bare root sign. ParseUnary picks this up as a prefix operator.
+                if (c == '\u221A')
+                {
+                    tokens.Add(new Token(TokenKind.Symbol, "sqrt", i));
+                    i++;
+                    continue;
+                }
+
+                // A superscript is a power with the '^' left out, so emit both halves
+                // of it. Both carry the superscript's own position, which is the column
+                // the reader would point at anyway.
+                int superscript = "\u00B2\u00B3\u2074\u2075\u2076".IndexOf(c);
+                if (superscript >= 0)
+                {
+                    tokens.Add(new Token(TokenKind.Symbol, "^", i));
+                    tokens.Add(new Token(TokenKind.Number,
+                        (superscript + 2).ToString(CultureInfo.InvariantCulture), i));
+                    i++;
                     continue;
                 }
 
@@ -291,10 +409,15 @@ namespace LPR381Project.NonLinear
                 { "abs", Math.Abs }
             };
 
+        // 'e' is safe to reserve here only because the number scanner above consumes
+        // the 'e' in 1e-6 as part of the number, so the two never collide. It does mean
+        // 'e' cannot be used as a variable name; x, y and x1..xn all still can.
         private static readonly Dictionary<string, double> MathConstants =
             new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
             {
-                { "pi", Math.PI }
+                { "pi", Math.PI },
+                { "\u03C0", Math.PI },
+                { "e", Math.E }
             };
 
         // Token helpers.

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace LPR381Project.NonLinear
 {
@@ -101,6 +102,8 @@ namespace LPR381Project.NonLinear
         /// <summary>Runs the non-linear menu.</summary>
         public static bool Run()
         {
+            EnableUnicodeConsole();
+
             // Store messages that must survive the next screen clear.
             string? notice = null;
 
@@ -142,7 +145,8 @@ namespace LPR381Project.NonLinear
                     Console.WriteLine();
                     Console.WriteLine("  Use * for multiplication and ^ for powers, e.g. 2*x1^2 - 3*x1*x2.");
                     Console.WriteLine("  Variables are whatever names you type: x, or x1 x2 x3, or x y z.");
-                    Console.WriteLine("  Available functions: sin, cos, tan, exp, ln, log, sqrt, abs, and pi.");
+                    Console.WriteLine("  Available functions: sin, cos, tan, exp, ln, log, sqrt, abs.");
+                    Console.WriteLine("  Constants: pi and e. Symbols also accepted: \u03C0, \u221A, \u00D7, \u00F7, and x\u00B2 for x^2.");
                     Console.WriteLine();
 
                     if (!TryPrompt("f = ", out expression))
@@ -268,6 +272,7 @@ namespace LPR381Project.NonLinear
             Console.WriteLine();
             Console.WriteLine("Golden section needs a starting interval [a, b] that contains the optimum.");
             Console.WriteLine("Enter two numbers, or press Enter to search for one automatically.");
+            Console.WriteLine("  Expressions are fine here: 0 pi/2, or -pi pi, or 0, sqrt(2).");
 
             if (!TryPrompt(string.Format("Interval [a b] (default {0} {1}): ",
                     NonLinearReport.Fmt(defaultInterval[0]), NonLinearReport.Fmt(defaultInterval[1])),
@@ -372,6 +377,7 @@ namespace LPR381Project.NonLinear
 
             Console.WriteLine();
             Console.WriteLine("Steepest " + (maximise ? "ascent" : "descent") + " needs a starting point.");
+            Console.WriteLine("  Expressions are fine here too, e.g. pi/4 1, or 0, -pi/2.");
 
             if (!TryPrompt(string.Format("Starting point ({0}) (default {1}): ",
                     string.Join(" ", function.Variables),
@@ -559,10 +565,9 @@ namespace LPR381Project.NonLinear
                     return true;
                 }
 
-                if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture,
-                        out double value))
+                if (!TryReadNumber(text, out double value))
                 {
-                    Console.WriteLine("That is not a number. Try 0.05, or 1e-6.");
+                    Console.WriteLine("That is not a number. Try 0.05, or 1e-6, or pi/1000.");
                     continue;
                 }
 
@@ -635,12 +640,19 @@ namespace LPR381Project.NonLinear
             return true;
         }
 
-        /// <summary>Parses a fixed number of numeric values.</summary>
+        /// <summary>Parses a fixed number of values, each of which may be an expression.</summary>
+        /// <remarks>
+        /// Splits on commas when the line has any, so a single entry is allowed to
+        /// contain spaces - "0, pi / 2". Without a comma it splits on whitespace, which
+        /// is what the prompts ask for and what nearly everyone types; "0 pi/2" works,
+        /// "0 pi / 2" does not, and the comma is the way out of that.
+        /// </remarks>
         private static bool TryReadNumbers(string text, int count, out double[] values)
         {
             values = Array.Empty<double>();
 
-            string[] parts = text.Split(new[] { ' ', ',', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            char[] separators = text.Contains(',') ? new[] { ',' } : new[] { ' ', '\t' };
+            string[] parts = text.Split(separators, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length != count)
             {
                 return false;
@@ -649,8 +661,7 @@ namespace LPR381Project.NonLinear
             var parsed = new double[count];
             for (int i = 0; i < count; i++)
             {
-                if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture,
-                        out parsed[i]))
+                if (!TryReadNumber(parts[i], out parsed[i]))
                 {
                     return false;
                 }
@@ -659,6 +670,71 @@ namespace LPR381Project.NonLinear
             values = parsed;
             return true;
         }
+
+        /// <summary>Reads one value, accepting a plain number or a constant expression.</summary>
+        /// <remarks>
+        /// Plain numbers are tried first so that scientific notation keeps going through
+        /// double.Parse exactly as it always did - the tolerance prompt suggests 1e-6,
+        /// and that path must not change. Only when that fails is the text handed to the
+        /// expression parser, which is what makes "pi/2" and "sqrt(2)" work here.
+        /// </remarks>
+        private static bool TryReadNumber(string text, out double value)
+        {
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            {
+                return true;
+            }
+
+            return ExpressionParser.TryParseConstant(text, out value);
+        }
+
+        /// <summary>Switches the console to UTF-8 so typed symbols survive.</summary>
+        /// <remarks>
+        /// Windows consoles start on a legacy code page that cannot carry pi, the root
+        /// sign or a superscript - the bytes are mangled on the way in and the parser is
+        /// handed nonsense it can only reject. Switching to UTF-8 fixes that for someone
+        /// typing at a real console, which is the case this is for.
+        ///
+        /// It is deliberately skipped when input is redirected. Assigning
+        /// Console.InputEncoding rebuilds the shared stdin reader and throws away
+        /// anything the pipe has already buffered, so on a piped run it does not just
+        /// fail to help - it swallows the rest of the script. Piped input therefore
+        /// keeps the old behaviour and the ASCII spellings ("pi", "sqrt(2)", "x^2"),
+        /// which parse identically and are what a test script uses anyway.
+        ///
+        /// Both setters still throw when no console is attached, so both stay guarded.
+        /// Losing the symbols costs the user nothing else.
+        /// </remarks>
+        private static void EnableUnicodeConsole()
+        {
+            if (_consoleEncodingSet)
+            {
+                return;
+            }
+
+            _consoleEncodingSet = true;
+
+            if (Console.IsInputRedirected)
+            {
+                return;
+            }
+
+            try
+            {
+                Console.OutputEncoding = Encoding.UTF8;
+                Console.InputEncoding = Encoding.UTF8;
+            }
+            catch (IOException)
+            {
+                // No console attached. ASCII spellings still work.
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // Same again, on a platform that will not allow the change at all.
+            }
+        }
+
+        private static bool _consoleEncodingSet;
 
         /// <summary>Reads a line of user input.</summary>
         private static bool TryPrompt(string prompt, out string value)
