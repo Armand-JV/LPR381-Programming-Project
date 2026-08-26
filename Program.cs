@@ -56,10 +56,11 @@ namespace LPR381Project
                 {
                     Console.WriteLine($"  {i + 1}. {algorithms[i].Name}");
                 }
-                Console.WriteLine($"  {algorithms.Count + 1}. Exit");
+                Console.WriteLine($"  {algorithms.Count + 1}. Non-Linear optimisation (bonus)");
+                Console.WriteLine($"  {algorithms.Count + 2}. Exit");
                 Console.WriteLine();
 
-                Console.Write("Enter choice (1-" + (algorithms.Count + 1) + "): ");
+                Console.Write("Enter choice (1-" + (algorithms.Count + 2) + "): ");
                 string? choiceStr = Console.ReadLine()?.Trim();
 
                 if (!int.TryParse(choiceStr, out int choice))
@@ -68,10 +69,32 @@ namespace LPR381Project
                     continue;
                 }
 
-                if (choice == algorithms.Count + 1)
+                if (choice == algorithms.Count + 2)
                 {
                     Console.WriteLine("Exiting.");
                     break;
+                }
+
+                // The non-linear solver uses its own input and does not use the loaded model.
+                // Returning from it keeps the current LP loaded.
+                if (choice == algorithms.Count + 1)
+                {
+                    // Run returns false if input ends.
+                    if (!NonLinear.NonLinearMenu.Run())
+                    {
+                        break;
+                    }
+
+                    // Ask whether the user wants to run another algorithm.
+                    Console.WriteLine();
+                    Console.Write("Run another algorithm on the same model? (y/n): ");
+                    string? nonLinearContinue = Console.ReadLine()?.Trim().ToLower();
+                    if (nonLinearContinue != "y" && nonLinearContinue != "yes")
+                    {
+                        break;
+                    }
+
+                    continue;
                 }
 
                 if (choice < 1 || choice > algorithms.Count)
