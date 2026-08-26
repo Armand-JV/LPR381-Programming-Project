@@ -81,7 +81,7 @@ int int
 
 1. **Start the program** with an input file:
    ```powershell
-   dotnet run -- test_input.txt
+   dotnet run -- tests/test_input.txt
    ```
 
 2. **Parsed model** will be displayed showing objective, constraints, and sign restrictions.

@@ -1,18 +1,97 @@
-# Build outputs (Compilation artifacts)
+## ---------------------------------------------------------------
+##  LPR381 Programming Project
+##  Visual Studio / .NET console application (solve.exe)
+## ---------------------------------------------------------------
+
+# ----- Build results -----
 [Bb]in/
 [Oo]bj/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+artifacts/
+publish/
+*.publishsettings
 
-# IDE / User-specific files
+# ----- Visual Studio / IDE user-specific files -----
 .vs/
 *.user
 *.suo
+*.userprefs
 *.userosscache
 *.sln.docstates
+*.dbmdl
+*.jfm
+*.psess
+*.vsp
+*.vspx
 
-# Settings files
+# JetBrains Rider / ReSharper
+.idea/
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Visual Studio Code
+.vscode/
+
+# Local tooling settings (never share machine-specific config)
 settings.json
+.claude/settings.local.json
 
+# ----- NuGet -----
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+.nuget/
 
-# OS-specific files
+# ----- Build & diagnostic logs -----
+*.binlog
+msbuild.log
+msbuild.err
+msbuild.wrn
+*.tlog
+
+# ----- Test results & code coverage -----
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+
+# ----- Compiled binaries / debug symbols -----
+# (bin/ and obj/ already cover the normal build output; these are a safety net.
+#  If you ever need to commit the built solve.exe for submission, use: git add -f solve.exe)
+*.dll
+*.exe
+*.pdb
+*.cache
+*.ilk
+*.iobj
+*.ipdb
+
+# ----- OS-generated files -----
 .DS_Store
+._*
 Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ----- Scratch / temporary working files -----
+*_tmp.txt
+*.tmp
+*.bak
+*~
+/Project LPR381 (Programming).pdf
