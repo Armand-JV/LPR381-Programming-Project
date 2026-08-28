@@ -1,611 +1,252 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
-using LPR381Project.Models;
+using System.Globalization;
+using System.IO;
+using System.Linq;
 
-namespace LPR381Project.Algorithms.PrimalSimplex
+namespace Algorithms.PrimalSimplex
 {
-    /// <summary>
-    /// OWNER: Person 1 (Core App + Simplex)
-    /// Implements the Revised Primal Simplex algorithm using the product form
-    /// of the inverse. More efficient for large sparse problems as it only
-    /// maintains the basis inverse rather than the full tableau.
-    /// </summary>
-    public class RevisedPrimalSimplexSolver : IAlgorithm
+    public class RevisedPrimalSimplexSolver
     {
-        public string Name => "Revised Primal Simplex";
+        public int RoundingDigits { get; set; } = 6;
 
-        private const double Epsilon = 1e-9;
+        public RevisedPrimalSimplexSolver() { }
 
-        public SolutionResult Solve(LPModel model)
+        public void RunAndPrint(LpModel model, TextWriter output = null)
         {
-            var result = new SolutionResult
-            {
-                AlgorithmName = Name,
-                Status = SolutionStatus.NotSolved
-            };
+            output ??= Console.Out;
+            var log = Run(model);
+            foreach (var line in log) output.WriteLine(line);
+        }
 
-            // Warn when model contains integer/binary variables: we only solve the LP relaxation
-            if (model.SignRestrictions != null)
+        public List<string> Run(LpModel model)
+        {
+            var lines = new List<string>();
+            int m = model.A.GetLength(0);
+            int n = model.A.GetLength(1);
+
+            // initial basis: slack variables (last m columns)
+            var basis = new int[m];
+            for (int i = 0; i < m; i++) basis[i] = n - m + i; // indices of slack
+
+            var nonbasis = Enumerable.Range(0, n).Where(j => !basis.Contains(j)).ToList();
+
+            int iter = 0;
+            const int maxIter = 200;
+
+            while (true)
             {
-                for (int i = 0; i < model.SignRestrictions.Length; i++)
+                iter++;
+                if (iter > maxIter) throw new InvalidOperationException("Maximum iterations exceeded");
+
+                lines.Add(string.Empty);
+                lines.Add($"==================== Iteration {iter} ====================");
+                lines.Add($"Problem type: {(model.IsMax ? "Maximization" : "Minimization")}");
+
+                // Build B and B^-1
+                var B = MatrixExtensions.GetColumns(model.A, basis);
+                decimal[,] Binv;
+                try
                 {
-                    if (model.SignRestrictions[i] == SignRestriction.Integer || model.SignRestrictions[i] == SignRestriction.Binary)
-                    {
-                        result.Notes.Add("Warning: model contains integer/binary variables — simplex will solve the LP relaxation only.");
-                        break;
-                    }
+                    Binv = MatrixExtensions.Inverse(B);
                 }
-            }
-
-            // Work on a clone so we don't mutate the caller's model. Convert minimization
-            // problems to maximization by negating objective coefficients so the rest of
-            // the solver can assume a maximization problem.
-            var workingModel = model.Clone();
-            bool wasMin = false;
-            if (workingModel.Objective == ObjectiveType.Min)
-            {
-                wasMin = true;
-                workingModel.Objective = ObjectiveType.Max;
-                for (int i = 0; i < workingModel.ObjectiveCoefficients.Length; i++)
+                catch (Exception ex)
                 {
-                    workingModel.ObjectiveCoefficients[i] = -workingModel.ObjectiveCoefficients[i];
-                }
-            }
-
-            // Build canonical form data using working model
-            var data = BuildCanonicalForm(workingModel);
-
-            // Initialize basis inverse (B^-1) as identity
-            int basisSize = data.NumConstraints;
-            double[,] basisInverse = new double[basisSize, basisSize];
-            for (int i = 0; i < basisSize; i++)
-                basisInverse[i, i] = 1.0;
-
-            // Track basic variable indices
-            int[] basicVars = (int[])data.BasicVariableIndices.Clone();
-
-            // Store initial tableau for display
-            var initialTableau = BuildDisplayTableau(data, basisInverse, basicVars, "Initial Basis (B = I)");
-            result.Iterations.Add(initialTableau);
-
-            // Main simplex loop
-            int iteration = 0;
-            int maxIterations = 10000;
-
-            while (iteration < maxIterations)
-            {
-                // Compute current RHS: B^-1 * b (needed for infeasibility checks and ratio tests)
-                double[] currentRHS = new double[basisSize];
-                for (int i = 0; i < basisSize; i++)
-                {
-                    for (int j = 0; j < basisSize; j++)
-                    {
-                        currentRHS[i] += basisInverse[i, j] * data.RightHandSide[j];
-                    }
-                }
-
-                // Compute reduced costs: c_B * B^-1 * A - c (use working objective)
-                int enteringCol = SelectEnteringVariable(data, basisInverse, basicVars, workingModel.Objective);
-
-                if (enteringCol == -1)
-                {
-                    // Candidate optimal: check for artificial basics with positive RHS
-                    var infeasibleArtificials = new List<string>();
-                    int artificialStart = data.TotalVars - data.NumArtificial;
-                    for (int i = 0; i < basisSize; i++)
-                    {
-                        int bvIndex = basicVars[i];
-                        if (data.NumArtificial > 0 && bvIndex >= artificialStart)
-                        {
-                            double rhsVal = currentRHS[i];
-                            if (rhsVal > Epsilon)
-                            {
-                                string name = GetVariableName(bvIndex, data);
-                                infeasibleArtificials.Add($"{name} (RHS={rhsVal:0.######})");
-                            }
-                        }
-                    }
-
-                    if (infeasibleArtificials.Count > 0)
-                    {
-                        result.Status = SolutionStatus.Infeasible;
-                        result.Notes.Add("Problem is infeasible: artificial variable(s) remain positive in basis: " + string.Join(", ", infeasibleArtificials));
-                        break;
-                    }
-
-                    // Optimal
-                    result.Status = SolutionStatus.Optimal;
-                    ExtractSolution(data, basisInverse, basicVars, result, workingModel);
-                    if (wasMin)
-                    {
-                        result.ObjectiveValue = -result.ObjectiveValue;
-                    }
+                    lines.Add($"Error inverting B: {ex.Message}");
                     break;
                 }
 
-                // Compute entering column: B^-1 * A_j
-                double[] enteringColumn = new double[basisSize];
-                for (int i = 0; i < basisSize; i++)
+                // xb = B^-1 * b
+                var xb = MatrixExtensions.Multiply(Binv, model.B);
+
+                // c_B
+                var cB = new decimal[m];
+                for (int i = 0; i < m; i++) cB[i] = model.C[basis[i]];
+
+                // y^T = c_B^T * B^-1
+                var yT = MatrixExtensions.MultiplyRowVector(cB, Binv);
+
+                // reduced costs
+                var reduced = new decimal[n];
+                for (int j = 0; j < n; j++)
                 {
-                    for (int j = 0; j < basisSize; j++)
+                    var col = new decimal[m];
+                    for (int i = 0; i < m; i++) col[i] = model.A[i, j];
+                    var yTa = MatrixExtensions.Dot(yT, col);
+                    reduced[j] = model.C[j] - yTa;
+                    if (!model.IsMax) reduced[j] = -reduced[j]; // convert to maximization internally
+                }
+
+                lines.Add(string.Empty);
+                lines.Add("Basis information:");
+                lines.Add("  Basic variables: " + string.Join(", ", basis.Select(i => model.VarNames[i])));
+                lines.Add("  Non-basic variables: " + string.Join(", ", nonbasis.Select(i => model.VarNames[i])));
+                lines.Add(string.Empty);
+                lines.Add("B matrix (basic columns):");
+                lines.AddRange(FormatMatrix(B, model.VarNames, basis));
+                lines.Add(string.Empty);
+                lines.Add("B^-1 matrix:");
+                lines.AddRange(FormatMatrix(Binv, model.VarNames, basis));
+                lines.Add(string.Empty);
+                lines.Add("Basic solution (x_B):");
+                for (int i = 0; i < m; i++) lines.Add($"  {model.VarNames[basis[i]]} = {RoundStr(xb[i])}");
+
+                lines.Add(string.Empty);
+                lines.Add("Basic costs (c_B):");
+                for (int i = 0; i < m; i++) lines.Add($"  {model.VarNames[basis[i]]} = {RoundStr(cB[i])}");
+
+                lines.Add(string.Empty);
+                lines.Add("Dual prices (y^T):");
+                for (int i = 0; i < m; i++) lines.Add($"  y{i + 1} = {RoundStr(yT[i])}");
+
+                lines.Add(string.Empty);
+                lines.Add("Reduced costs:");
+                for (int j = 0; j < n; j++) lines.Add($"  {model.VarNames[j]} = {RoundStr(reduced[j])}");
+
+                // Choose entering variable: positive reduced cost (since we've normalized for maximization)
+                decimal bestVal = 0m;
+                int entering = -1;
+                for (int j = 0; j < n; j++)
+                {
+                    if (nonbasis.Contains(j) && reduced[j] > bestVal)
                     {
-                        enteringColumn[i] += basisInverse[i, j] * data.ConstraintMatrix[j, enteringCol];
+                        bestVal = reduced[j];
+                        entering = j;
                     }
                 }
 
-                // Minimum ratio test
-                int leavingRow = -1;
-                double minRatio = double.MaxValue;
-                for (int i = 0; i < basisSize; i++)
+                // Bland's rule tie-breaking: choose smallest index among positive reduced costs
+                if (entering == -1)
                 {
-                    if (enteringColumn[i] > Epsilon)
+                    var candidates = nonbasis.Where(j => reduced[j] > 0m).OrderBy(j => j).ToList();
+                    if (candidates.Count > 0) entering = candidates[0];
+                }
+
+                if (entering == -1)
+                {
+                    // optimal
+                    lines.Add("Optimal reached");
+                    var solution = new decimal[n];
+                    for (int i = 0; i < m; i++) solution[basis[i]] = xb[i];
+                    lines.Add(string.Empty);
+                    lines.Add("Solution:");
+                    for (int j = 0; j < n; j++) lines.Add($"{model.VarNames[j]} = {RoundStr(solution[j])}");
+                    decimal obj = 0m;
+                    for (int j = 0; j < n; j++) obj += model.C[j] * solution[j];
+                    if (!model.IsMax) obj = -obj;
+                    lines.Add($"Objective = {RoundStr(obj)}");
+                    break;
+                }
+
+                lines.Add(string.Empty);
+                lines.Add("Pivot selection:");
+                lines.Add($"  Entering variable: {model.VarNames[entering]} (index {entering})");
+
+                // direction d = B^-1 * a_entering
+                var a_enter = new decimal[m];
+                for (int i = 0; i < m; i++) a_enter[i] = model.A[i, entering];
+                var d = MatrixExtensions.Multiply(Binv, a_enter);
+                lines.Add(string.Empty);
+                lines.Add("Direction (d = B^-1 a_entering):");
+                for (int i = 0; i < m; i++) lines.Add($"  {model.VarNames[basis[i]]} = {RoundStr(d[i])}");
+
+                // Ratio test
+                decimal minRatio = decimal.MaxValue;
+                int leavingPos = -1;
+                lines.Add(string.Empty);
+                lines.Add("Ratio test:");
+                for (int i = 0; i < m; i++)
+                {
+                    if (d[i] > 0m)
                     {
-                        double ratio = currentRHS[i] / enteringColumn[i];
-                        if (ratio >= 0 && ratio < minRatio)
+                        var ratio = xb[i] / d[i];
+                        lines.Add($"  {model.VarNames[basis[i]]}: {RoundStr(xb[i])} / {RoundStr(d[i])} = {RoundStr(ratio)}");
+                        if (ratio < minRatio - 1e-28m)
                         {
                             minRatio = ratio;
-                            leavingRow = i;
+                            leavingPos = i;
+                        }
+                        else if (Math.Abs((double)(ratio - minRatio)) < 1e-28)
+                        {
+                            // tie: Bland's rule choose smallest index
+                            if (basis[i] < basis[leavingPos]) leavingPos = i;
                         }
                     }
                 }
 
-                if (leavingRow == -1)
+                if (leavingPos == -1)
                 {
-                    result.Status = SolutionStatus.Unbounded;
-                    result.Notes.Add("Problem is unbounded - no valid leaving variable.");
+                    lines.Add("Unbounded (no positive entries in direction)");
                     break;
                 }
 
-                // Update basis inverse using product form
-                UpdateBasisInverse(basisInverse, enteringColumn, leavingRow);
+                lines.Add($"  Leaving variable: {model.VarNames[basis[leavingPos]]} at position {leavingPos}");
 
-                // Update basic variable
-                basicVars[leavingRow] = enteringCol;
-
-                iteration++;
-
-                // Store iteration tableau
-                var iterTableau = BuildDisplayTableau(data, basisInverse, basicVars, $"Iteration {iteration}");
-                result.Iterations.Add(iterTableau);
+                // pivot: replace
+                var leavingIndex = basis[leavingPos];
+                basis[leavingPos] = entering;
+                nonbasis.Remove(entering);
+                nonbasis.Add(leavingIndex);
+                nonbasis.Sort();
+                // continue loop
             }
 
-            if (iteration >= maxIterations)
-            {
-                result.Notes.Add($"Maximum iterations ({maxIterations}) reached.");
-            }
-
-            return result;
+            return lines;
         }
 
-        private CanonicalData BuildCanonicalForm(LPModel model)
+        private string RoundStr(decimal v)
         {
-            var data = new CanonicalData();
-            int numOriginalVars = model.ObjectiveCoefficients.Length;
-            int numConstraints = model.Constraints.Count;
-
-            int numSlack = 0;
-            int numArtificial = 0;
-
-            for (int i = 0; i < numConstraints; i++)
-            {
-                var constraint = model.Constraints[i];
-                if (constraint.Relation == RelationType.LessOrEqual)
-                    numSlack++;
-                else if (constraint.Relation == RelationType.GreaterOrEqual)
-                {
-                    numSlack++;
-                    numArtificial++;
-                }
-                else
-                    numArtificial++;
-            }
-
-            int numExtraVars = 0;
-            for (int i = 0; i < numOriginalVars; i++)
-            {
-                if (model.SignRestrictions[i] == SignRestriction.Unrestricted)
-                    numExtraVars++;
-            }
-
-            int totalVars = numOriginalVars + numExtraVars + numSlack + numArtificial;
-
-            data.ObjectiveCoeffs = new double[totalVars];
-            int colIndex = 0;
-
-            for (int i = 0; i < numOriginalVars; i++)
-            {
-                if (model.SignRestrictions[i] == SignRestriction.Unrestricted)
-                {
-                    data.ObjectiveCoeffs[colIndex++] = model.ObjectiveCoefficients[i];
-                    data.ObjectiveCoeffs[colIndex++] = -model.ObjectiveCoefficients[i];
-                    data.OriginalVarMap.Add(i, new int[] { colIndex - 2, colIndex - 1 });
-                }
-                else
-                {
-                    data.ObjectiveCoeffs[colIndex++] = model.ObjectiveCoefficients[i];
-                    data.OriginalVarMap.Add(i, new int[] { colIndex - 1 });
-                }
-            }
-
-            for (int i = 0; i < numSlack; i++)
-                data.ObjectiveCoeffs[colIndex++] = 0;
-            for (int i = 0; i < numArtificial; i++)
-                data.ObjectiveCoeffs[colIndex++] = model.Objective == ObjectiveType.Max ? -1e10 : 1e10;
-
-            data.ConstraintMatrix = new double[numConstraints, totalVars];
-            data.RightHandSide = new double[numConstraints];
-            data.BasicVariables = new string[numConstraints];
-            data.BasicVariableIndices = new int[numConstraints];
-
-            int slackIndex = numOriginalVars + numExtraVars;
-            int artificialIndex = numOriginalVars + numExtraVars + numSlack;
-
-            for (int row = 0; row < numConstraints; row++)
-            {
-                var constraint = model.Constraints[row];
-                double rhs = constraint.Rhs;
-                double signMultiplier = rhs < 0 ? -1.0 : 1.0;
-                rhs = Math.Abs(rhs);
-
-                colIndex = 0;
-                for (int i = 0; i < numOriginalVars; i++)
-                {
-                    double coeff = constraint.Coefficients[i] * signMultiplier;
-                    if (model.SignRestrictions[i] == SignRestriction.Unrestricted)
-                    {
-                        data.ConstraintMatrix[row, colIndex++] = coeff;
-                        data.ConstraintMatrix[row, colIndex++] = -coeff;
-                    }
-                    else
-                    {
-                        data.ConstraintMatrix[row, colIndex++] = coeff;
-                    }
-                }
-
-                if (constraint.Relation == RelationType.LessOrEqual)
-                {
-                    data.ConstraintMatrix[row, slackIndex] = 1.0 * signMultiplier;
-                    data.BasicVariables[row] = $"s{row + 1}";
-                    data.BasicVariableIndices[row] = slackIndex;
-                    slackIndex++;
-                }
-                else if (constraint.Relation == RelationType.GreaterOrEqual)
-                {
-                    data.ConstraintMatrix[row, slackIndex] = -1.0 * signMultiplier;
-                    data.ConstraintMatrix[row, artificialIndex] = 1.0;
-                    data.BasicVariables[row] = $"a{row + 1}";
-                    data.BasicVariableIndices[row] = artificialIndex;
-                    slackIndex++;
-                    artificialIndex++;
-                }
-                else
-                {
-                    data.ConstraintMatrix[row, artificialIndex] = 1.0;
-                    data.BasicVariables[row] = $"a{row + 1}";
-                    data.BasicVariableIndices[row] = artificialIndex;
-                    artificialIndex++;
-                }
-
-                data.RightHandSide[row] = rhs;
-            }
-
-            data.NumOriginalVars = numOriginalVars;
-            data.NumExtraVars = numExtraVars;
-            data.NumSlack = numSlack;
-            data.NumArtificial = numArtificial;
-            data.TotalVars = totalVars;
-            data.NumConstraints = numConstraints;
-            data.OriginalModel = model;
-
-            return data;
+            return Math.Round(v, RoundingDigits).ToString($"F{RoundingDigits}", CultureInfo.InvariantCulture).TrimEnd('0').TrimEnd('.');
         }
 
-        private int SelectEnteringVariable(CanonicalData data, double[,] basisInverse, int[] basicVars, ObjectiveType objective)
+        private string FormatBasis(int[] basis, string[] varNames)
         {
-            int basisSize = data.NumConstraints;
-
-            // Compute c_B (costs of basic variables)
-            double[] cB = new double[basisSize];
-            for (int i = 0; i < basisSize; i++)
-                cB[i] = data.ObjectiveCoeffs[basicVars[i]];
-
-            // Compute c_B * B^-1 (simplex multipliers / dual variables)
-            double[] simplexMultipliers = new double[basisSize];
-            for (int j = 0; j < basisSize; j++)
-            {
-                for (int i = 0; i < basisSize; i++)
-                {
-                    simplexMultipliers[j] += cB[i] * basisInverse[i, j];
-                }
-            }
-
-            // Compute reduced costs for all non-basic variables
-            int enteringCol = -1;
-            double bestValue = 0;
-
-            for (int j = 0; j < data.TotalVars; j++)
-            {
-                // Check if j is basic
-                bool isBasic = false;
-                for (int i = 0; i < basisSize; i++)
-                {
-                    if (basicVars[i] == j)
-                    {
-                        isBasic = true;
-                        break;
-                    }
-                }
-
-                if (!isBasic)
-                {
-                    // Reduced cost = c_j - c_B * B^-1 * A_j
-                    double[] aCol = new double[basisSize];
-                    for (int i = 0; i < basisSize; i++)
-                        aCol[i] = data.ConstraintMatrix[i, j];
-
-                    double reducedCost = data.ObjectiveCoeffs[j];
-                    for (int i = 0; i < basisSize; i++)
-                    {
-                        reducedCost -= simplexMultipliers[i] * aCol[i];
-                    }
-
-                    if (objective == ObjectiveType.Max)
-                    {
-                        // For maximization: enter variable with most POSITIVE reduced cost
-                        if (reducedCost > Epsilon && reducedCost > bestValue)
-                        {
-                            bestValue = reducedCost;
-                            enteringCol = j;
-                        }
-                    }
-                    else
-                    {
-                        // For minimization: enter variable with most NEGATIVE reduced cost
-                        if (reducedCost < -Epsilon && reducedCost < bestValue)
-                        {
-                            bestValue = reducedCost;
-                            enteringCol = j;
-                        }
-                    }
-                }
-            }
-
-            return enteringCol;
+            return "Basis: " + string.Join(", ", basis.Select(i => varNames[i]));
         }
 
-        private void UpdateBasisInverse(double[,] basisInverse, double[] enteringColumn, int leavingRow)
+        private IEnumerable<string> FormatMatrix(decimal[,] mat, string[] varNames, int[] basis)
         {
-            int n = basisInverse.GetLength(0);
+            int rows = mat.GetLength(0);
+            int cols = mat.GetLength(1);
+            var headers = new string[cols + 1];
+            headers[0] = string.Empty;
+            for (int j = 0; j < cols; j++) headers[j + 1] = varNames[basis[j]];
 
-            // Compute eta vector
-            double pivot = enteringColumn[leavingRow];
-            double[] eta = new double[n];
-            for (int i = 0; i < n; i++)
+            var table = new List<string[]> { headers };
+            for (int i = 0; i < rows; i++)
             {
-                if (i == leavingRow)
-                    eta[i] = 1.0 / pivot;
-                else
-                    eta[i] = -enteringColumn[i] / pivot;
+                var row = new string[cols + 1];
+                row[0] = varNames[basis[i]];
+                for (int j = 0; j < cols; j++) row[j + 1] = RoundStr(mat[i, j]);
+                table.Add(row);
             }
 
-            // Update B^-1 using product form: B^-1_new = E * B^-1
-            // where E is the eta matrix
-            double[,] newInverse = new double[n, n];
-            for (int i = 0; i < n; i++)
+            var widths = new int[cols + 1];
+            for (int j = 0; j <= cols; j++)
             {
-                for (int j = 0; j < n; j++)
-                {
-                    if (i == leavingRow)
-                        newInverse[i, j] = eta[i] * basisInverse[leavingRow, j];
-                    else
-                        newInverse[i, j] = basisInverse[i, j] + eta[i] * basisInverse[leavingRow, j];
-                }
+                widths[j] = table.Max(row => row[j].Length);
             }
 
-            // Copy back
-            for (int i = 0; i < n; i++)
-                for (int j = 0; j < n; j++)
-                    basisInverse[i, j] = newInverse[i, j];
+            string border = "+" + string.Join("+", widths.Select(width => new string('-', width + 2))) + "+";
+            var lines = new List<string>();
+            lines.Add(border);
+            lines.Add(FormatGridRow(table[0], widths, false));
+            lines.Add(border);
+            for (int i = 1; i < table.Count; i++)
+            {
+                lines.Add(FormatGridRow(table[i], widths, true));
+            }
+            lines.Add(border);
+            return lines;
         }
 
-        private Tableau BuildDisplayTableau(CanonicalData data, double[,] basisInverse, int[] basicVars, string label)
+        private static string FormatGridRow(string[] cells, int[] widths, bool rightAlignValues)
         {
-            int basisSize = data.NumConstraints;
-
-            // Compute current solution values
-            double[] xB = new double[basisSize];
-            for (int i = 0; i < basisSize; i++)
-            {
-                for (int j = 0; j < basisSize; j++)
-                {
-                    xB[i] += basisInverse[i, j] * data.RightHandSide[j];
-                }
-            }
-
-            // Build a complete tableau for display
-            int rows = basisSize + 1;
-            int cols = data.TotalVars + 1;
-
-            var tableau = new Tableau
-            {
-                Values = new double[rows, cols],
-                ColumnHeaders = new string[cols],
-                BasicVariables = new string[basisSize],
-                Label = label
-            };
-
-            // Set column headers
-            int col = 0;
-            int varNum = 1;
-            for (int i = 0; i < data.NumOriginalVars; i++)
-            {
-                if (data.OriginalModel.SignRestrictions[i] == SignRestriction.Unrestricted)
-                {
-                    tableau.ColumnHeaders[col++] = $"x{varNum}+";
-                    tableau.ColumnHeaders[col++] = $"x{varNum}-";
-                }
-                else
-                {
-                    tableau.ColumnHeaders[col++] = $"x{varNum}";
-                }
-                varNum++;
-            }
-            for (int i = 0; i < data.NumSlack; i++)
-                tableau.ColumnHeaders[col++] = $"s{i + 1}";
-            for (int i = 0; i < data.NumArtificial; i++)
-                tableau.ColumnHeaders[col++] = $"a{i + 1}";
-            tableau.ColumnHeaders[col] = "RHS";
-
-            // Compute reduced costs for objective row
-            double[] cB = new double[basisSize];
-            for (int i = 0; i < basisSize; i++)
-                cB[i] = data.ObjectiveCoeffs[basicVars[i]];
-
-            double[] simplexMultipliers = new double[basisSize];
-            for (int j = 0; j < basisSize; j++)
-                for (int i = 0; i < basisSize; i++)
-                    simplexMultipliers[j] += cB[i] * basisInverse[i, j];
-
-            // Objective row
-            double objValue = 0;
-            for (int j = 0; j < data.TotalVars; j++)
-            {
-                double reducedCost = data.ObjectiveCoeffs[j];
-                for (int i = 0; i < basisSize; i++)
-                    reducedCost -= simplexMultipliers[i] * data.ConstraintMatrix[i, j];
-                tableau.Values[0, j] = reducedCost;
-
-                // Add contribution to objective from basic variables
-                for (int i = 0; i < basisSize; i++)
-                {
-                    if (basicVars[i] == j)
-                    {
-                        objValue += data.ObjectiveCoeffs[j] * xB[i];
-                        break;
-                    }
-                }
-            }
-            tableau.Values[0, cols - 1] = objValue;
-
-            // Constraint rows
-            for (int i = 0; i < basisSize; i++)
-            {
-                // Compute B^-1 * A for each column
-                for (int j = 0; j < data.TotalVars; j++)
-                {
-                    double val = 0;
-                    for (int k = 0; k < basisSize; k++)
-                        val += basisInverse[i, k] * data.ConstraintMatrix[k, j];
-                    tableau.Values[i + 1, j] = val;
-                }
-                tableau.Values[i + 1, cols - 1] = xB[i];
-                tableau.BasicVariables[i] = GetVariableName(basicVars[i], data);
-            }
-
-            return tableau;
-        }
-
-        private string GetVariableName(int colIndex, CanonicalData data)
-        {
-            int col = 0;
-            int varNum = 1;
-            for (int i = 0; i < data.NumOriginalVars; i++)
-            {
-                if (data.OriginalModel.SignRestrictions[i] == SignRestriction.Unrestricted)
-                {
-                    if (col == colIndex) return $"x{varNum}+";
-                    col++;
-                    if (col == colIndex) return $"x{varNum}-";
-                    col++;
-                }
-                else
-                {
-                    if (col == colIndex) return $"x{varNum}";
-                    col++;
-                }
-                varNum++;
-            }
-            for (int i = 0; i < data.NumSlack; i++)
-            {
-                if (col == colIndex) return $"s{i + 1}";
-                col++;
-            }
-            for (int i = 0; i < data.NumArtificial; i++)
-            {
-                if (col == colIndex) return $"a{i + 1}";
-                col++;
-            }
-            return "?";
-        }
-
-        private void ExtractSolution(CanonicalData data, double[,] basisInverse, int[] basicVars, SolutionResult result, LPModel model)
-        {
-            int basisSize = data.NumConstraints;
-
-            // Compute solution
-            double[] xB = new double[basisSize];
-            for (int i = 0; i < basisSize; i++)
-            {
-                for (int j = 0; j < basisSize; j++)
-                {
-                    xB[i] += basisInverse[i, j] * data.RightHandSide[j];
-                }
-            }
-
-            // Build full solution vector
-            double[] fullSolution = new double[data.TotalVars];
-            for (int i = 0; i < basisSize; i++)
-            {
-                fullSolution[basicVars[i]] = xB[i];
-            }
-
-            // Extract original variable values
-            int numVars = model.ObjectiveCoefficients.Length;
-            result.VariableValues = new double[numVars];
-
-            for (int i = 0; i < numVars; i++)
-            {
-                if (model.SignRestrictions[i] == SignRestriction.Unrestricted)
-                {
-                    var indices = data.OriginalVarMap[i];
-                    result.VariableValues[i] = fullSolution[indices[0]] - fullSolution[indices[1]];
-                }
-                else
-                {
-                    var indices = data.OriginalVarMap[i];
-                    result.VariableValues[i] = fullSolution[indices[0]];
-                }
-            }
-
-            // Objective value
-            result.ObjectiveValue = 0;
-            for (int i = 0; i < basisSize; i++)
-            {
-                result.ObjectiveValue += data.ObjectiveCoeffs[basicVars[i]] * xB[i];
-            }
-
-            if (model.Objective == ObjectiveType.Min)
-            {
-                result.ObjectiveValue = -result.ObjectiveValue;
-            }
-        }
-
-        private class CanonicalData
-        {
-            public double[] ObjectiveCoeffs;
-            public double[,] ConstraintMatrix;
-            public double[] RightHandSide;
-            public string[] BasicVariables;
-            public int[] BasicVariableIndices;
-            public Dictionary<int, int[]> OriginalVarMap = new Dictionary<int, int[]>();
-            public int NumOriginalVars;
-            public int NumExtraVars;
-            public int NumSlack;
-            public int NumArtificial;
-            public int TotalVars;
-            public int NumConstraints;
-            public LPModel OriginalModel;
+            var formattedCells = cells.Select((cell, index) =>
+                rightAlignValues && index > 0
+                    ? cell.PadLeft(widths[index])
+                    : cell.PadRight(widths[index]));
+            return "| " + string.Join(" | ", formattedCells) + " |";
         }
     }
 }

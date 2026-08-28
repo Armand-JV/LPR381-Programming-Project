@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using LPR381Project.Models;
 
 namespace LPR381Project.Algorithms.PrimalSimplex
@@ -55,7 +56,15 @@ namespace LPR381Project.Algorithms.PrimalSimplex
 
             // Step 2: Build initial tableau
             var tableau = BuildInitialTableau(canonicalData, workingModel.Objective);
+
+            // Add the numeric initial tableau (iteration 0) and print it to console
+            tableau.Label = "Initial Tableau (Iteration 0)";
             result.Iterations.Add(tableau);
+            Console.WriteLine(tableau.ToString());
+
+            // Print human-readable canonical equations (do not add as a tableau entry
+            // so it doesn't count toward tableau iteration snapshots).
+            Console.WriteLine("Canonical Form\n" + FormatCanonical(canonicalData));
 
             // Step 3: Simplex iterations
             int iteration = 0;
@@ -100,6 +109,11 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                     {
                         result.ObjectiveValue = -result.ObjectiveValue;
                     }
+                    // Add the optimal tableau snapshot with an explicit label
+                    var optimalTableau = CloneTableau(tableau);
+                    optimalTableau.Label = "Optimal Tableau";
+                    result.Iterations.Add(optimalTableau);
+                    Console.WriteLine(optimalTableau.ToString());
                     break;
                 }
 
@@ -317,22 +331,31 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                 tableau.ColumnHeaders[col++] = $"a{i + 1}";
             tableau.ColumnHeaders[col] = "RHS";
 
-            // Objective row (row 0)
-            // For maximization: z - c1*x1 - c2*x2 - ... = 0
-            // For minimization: z + c1*x1 + c2*x2 + ... = 0 (but we convert to max by negating)
-            for (int c = 0; c < data.TotalVars; c++)
+            // Objective row: compute reduced costs as c_B * A - c
+            // c_B are the objective coefficients of the basic variables
+            double[] cB = new double[data.NumConstraints];
+            for (int r = 0; r < data.NumConstraints; r++)
             {
-                double objCoeff = data.ObjectiveCoeffs[c];
-                if (objective == ObjectiveType.Max)
-                {
-                    tableau.Values[0, c] = -objCoeff; // negative for max
-                }
-                else
-                {
-                    tableau.Values[0, c] = objCoeff; // positive for min
-                }
+                int basicCol = data.BasicVariableIndices[r];
+                cB[r] = data.ObjectiveCoeffs[basicCol];
             }
-            tableau.Values[0, cols - 1] = 0; // RHS of objective
+
+            for (int j = 0; j < data.TotalVars; j++)
+            {
+                double val = 0.0;
+                for (int r = 0; r < data.NumConstraints; r++)
+                {
+                    val += cB[r] * data.ConstraintMatrix[r, j];
+                }
+                tableau.Values[0, j] = val - data.ObjectiveCoeffs[j];
+            }
+            // Objective RHS = c_B * x_B (x_B = RHS since basis is identity for slacks)
+            double objRhs = 0.0;
+            for (int r = 0; r < data.NumConstraints; r++)
+            {
+                objRhs += cB[r] * data.RightHandSide[r];
+            }
+            tableau.Values[0, cols - 1] = objRhs;
 
             // Constraint rows
             for (int r = 0; r < data.NumConstraints; r++)
@@ -345,22 +368,72 @@ namespace LPR381Project.Algorithms.PrimalSimplex
                 tableau.BasicVariables[r] = data.BasicVariables[r];
             }
 
-            // Make objective row consistent with basic variables
-            // Subtract appropriate multiples of constraint rows from objective row
-            for (int r = 0; r < data.NumConstraints; r++)
-            {
-                int basicCol = data.BasicVariableIndices[r];
-                if (Math.Abs(tableau.Values[0, basicCol]) > Epsilon)
-                {
-                    double multiplier = tableau.Values[0, basicCol];
-                    for (int c = 0; c < cols; c++)
-                    {
-                        tableau.Values[0, c] -= multiplier * tableau.Values[r + 1, c];
-                    }
-                }
-            }
+            // The reduced-cost computation above already makes the objective row
+            // consistent with the basic variables (c_B * B^-1 * A - c), so no
+            // extra adjustment is required here.
 
             return tableau;
+        }
+
+        private string FormatCanonical(CanonicalData data)
+        {
+            var sb = new StringBuilder();
+
+            // Objective row: (z) - c1 x1 - c2 x2 ... = 0
+            sb.Append("(z)\t");
+            for (int i = 0; i < data.NumOriginalVars; i++)
+            {
+                var indices = data.OriginalVarMap[i];
+                double coeff = data.OriginalModel.ObjectiveCoefficients[i];
+                if (i > 0) sb.Append("\t");
+                if (coeff >= 0)
+                    sb.AppendFormat("-\t{0}x{1}", coeff, i + 1);
+                else
+                    sb.AppendFormat("+\t{0}x{1}", Math.Abs(coeff), i + 1);
+            }
+            sb.Append("\t=\t0\n");
+
+            // Constraints
+            int totalCols = data.TotalVars;
+            int slackStart = data.NumOriginalVars + data.NumExtraVars;
+
+            for (int r = 0; r < data.NumConstraints; r++)
+            {
+                var terms = new List<string>();
+                // original variables
+                for (int i = 0; i < data.NumOriginalVars; i++)
+                {
+                    var indices = data.OriginalVarMap[i];
+                    double coeff = data.ConstraintMatrix[r, indices[0]]; // use x+ column for unrestricted
+                    if (Math.Abs(coeff) > 1e-12)
+                    {
+                        string term = (coeff == (int)coeff) ? string.Format("{0}x{1}", (int)coeff, i + 1)
+                            : string.Format("{0}x{1}", coeff, i + 1);
+                        terms.Add(term);
+                    }
+                }
+
+                // slack variables
+                for (int s = 0; s < data.NumSlack; s++)
+                {
+                    int col = slackStart + s;
+                    double coeff = data.ConstraintMatrix[r, col];
+                    if (Math.Abs(coeff) > 1e-12)
+                    {
+                        string term = string.Format("{0}s{1}", coeff, s + 1);
+                        terms.Add(term);
+                    }
+                }
+
+                if (terms.Count == 0)
+                    sb.Append("0");
+                else
+                    sb.Append(string.Join("\t+\t", terms));
+
+                sb.AppendFormat("\t=\t{0}\n", data.RightHandSide[r]);
+            }
+
+            return sb.ToString();
         }
 
         private int SelectEnteringVariable(Tableau tableau, ObjectiveType objective)

@@ -18,7 +18,7 @@ namespace LPR381Project.Algorithms
             return new List<IAlgorithm>
             {
                 new PrimalSimplexSolver(),          // Person 1
-                new RevisedPrimalSimplexSolver(),   // Person 1
+                new RevisedPrimalSimplexSolver(),   // Person 1 
                 new BranchAndBoundSimplexSolver(),  // Person 2
                 new CuttingPlaneSolver(),           // Person 3
                 new BranchAndBoundKnapsackSolver(), // Person 3

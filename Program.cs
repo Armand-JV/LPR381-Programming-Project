@@ -258,7 +258,15 @@ namespace LPR381Project
             if (result.Iterations.Count > 0)
             {
                 Console.WriteLine();
-                Console.WriteLine($"=== Tableau Iterations ({result.Iterations.Count}) ===");
+                // Count only actual pivot iterations (labels like "Iteration N") so
+                // the displayed number reflects the number of simplex pivots performed.
+                int pivotCount = 0;
+                foreach (var t in result.Iterations)
+                {
+                    if (!string.IsNullOrEmpty(t.Label) && t.Label.StartsWith("Iteration"))
+                        pivotCount++;
+                }
+                Console.WriteLine($"=== Tableau Iterations ({pivotCount}) ===");
                 foreach (var tableau in result.Iterations)
                 {
                     Console.WriteLine();
